@@ -24,13 +24,17 @@ import (
 // Hit is one request.
 type Hit struct {
 	At     time.Time
+	Method string // "" is GET; Reason ignores all but GET and HEAD
 	Host   string // lowercase, no port
 	Path   string
 	Status int
 	Ref    string // external referrer host; "" when none or one of the sites' own
 }
 
-// Visitor is one browser on one network.
+func (h Hit) read() bool { return h.Method == "" || h.Method == "GET" || h.Method == "HEAD" }
+
+// Visitor is one browser on one network. IP is any of its addresses or
+// its Network prefix.
 type Visitor struct {
 	IP, UA string
 	Hits   []Hit
@@ -46,7 +50,7 @@ type Visitor struct {
 
 // Thresholds.
 const (
-	NotFound     = 3               // this many 404s (images aside) mark a crawler
+	NotFound     = 3               // this many 404s (NotProbe aside) mark a crawler
 	Burst        = 10              // as do this many pages within a minute
 	Sites        = 4               // or pages on this many sites within SiteBurst
 	SiteBurst    = 5 * time.Second //
@@ -65,6 +69,9 @@ var (
 	chromeRe = regexp.MustCompile(`Chrome/(\d+)\.`)
 	assetRe  = regexp.MustCompile(`(?i)\.(css|js|png|jpe?g|gif|svg|webp|avif)$`)
 	imageRe  = regexp.MustCompile(`(?i)\.(png|jpe?g|gif|svg|webp|avif|ico)$`)
+	// What browsers miss on their own: icons, images, source maps, .txt
+	// files and /.well-known/ lookups.
+	notProbeRe = regexp.MustCompile(`(?i)\.(ico|png|jpe?g|gif|svg|webp|avif|map|txt)$|^/\.well-known/`)
 )
 
 // BotUA reports whether ua names itself a bot, a library or a feed reader.
@@ -98,8 +105,13 @@ func Stale(ua string, t time.Time) bool {
 // IsAsset reports whether path is a stylesheet, script or image.
 func IsAsset(path string) bool { return assetRe.MatchString(stripQuery(path)) }
 
-// IsImage reports whether path is an image; a missing one isn't a probe.
+// IsImage reports whether path is an image.
 func IsImage(path string) bool { return imageRe.MatchString(stripQuery(path)) }
+
+// NotProbe reports whether a 404 for path is one a browser makes on its own
+// (an icon, image, source map, .txt file or /.well-known/ lookup), so it
+// doesn't count toward NotFound.
+func NotProbe(path string) bool { return notProbeRe.MatchString(stripQuery(path)) }
 
 // IsPage reports whether path looks like an HTML page: .html, a trailing
 // slash, or no extension, outside /auth/, /api/ and /static/.
@@ -129,6 +141,28 @@ func Network(ip string) string {
 	return p.String()
 }
 
+// addr parses an address, or a prefix (as Network returns) as its first address.
+func addr(s string) (netip.Addr, bool) {
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Unmap(), true
+	}
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return p.Masked().Addr().Unmap(), true
+	}
+	return netip.Addr{}, false
+}
+
+// Pages counts v's page reads as Reason does: successful GETs of pages.
+func (r Rules) Pages(v Visitor) int {
+	n := 0
+	for _, h := range v.Hits {
+		if h.read() && (h.Status == 304 || h.Status >= 200 && h.Status < 300) && !IsAsset(h.Path) && r.page(h) {
+			n++
+		}
+	}
+	return n
+}
+
 // Rules adapts Reason to a site. The zero value applies the generic rules.
 type Rules struct {
 	// Page reports whether a successful hit counts as a page read; nil uses
@@ -137,8 +171,9 @@ type Rules struct {
 	Page func(Hit) bool
 	// Extra runs last, on visitors no generic rule flagged and that aren't
 	// Named: a site's own crawl patterns (only list pages, a path the site
-	// never links). pages are sorted by time; referred is whether any hit
-	// came from an external link.
+	// never links). pages are the successful page reads, sorted by time;
+	// v.Hits has every request (404s, redirects, other extensions); referred
+	// is whether any hit came from an external link.
 	Extra func(v Visitor, pages []Hit, referred bool) string
 }
 
@@ -154,10 +189,13 @@ func (r Rules) Reason(v Visitor) string {
 	var referred bool
 	var pages []Hit
 	for _, h := range v.Hits {
+		if !h.read() {
+			continue
+		}
 		referred = referred || h.Ref != ""
 		ok := h.Status == 304 || h.Status >= 200 && h.Status < 300
 		switch {
-		case h.Status == 404 && !IsImage(h.Path):
+		case h.Status == 404 && !NotProbe(h.Path):
 			missing++
 		case IsAsset(h.Path):
 			if ok {
@@ -284,7 +322,7 @@ func Fleets(rows []FleetRow) map[int]string {
 		if x.Last.After(f.last) {
 			f.last = x.Last
 		}
-		if p, ok := wideNet(x.IP); ok && !x.Named {
+		if p, ok := WideNet(x.IP); ok && !x.Named {
 			f.nets[p] = true
 		}
 	}
@@ -303,13 +341,13 @@ func Fleets(rows []FleetRow) map[int]string {
 	return out
 }
 
-// wideNet is ip's IPv4 /16 or IPv6 /32: one operator's block.
-func wideNet(ip string) (netip.Prefix, bool) {
-	a, err := netip.ParseAddr(ip)
-	if err != nil {
+// WideNet is ip's IPv4 /16 or IPv6 /32: one operator's block. ip may be an
+// address or a prefix.
+func WideNet(ip string) (netip.Prefix, bool) {
+	a, ok := addr(ip)
+	if !ok {
 		return netip.Prefix{}, false
 	}
-	a = a.Unmap()
 	bits := 32
 	if a.Is4() {
 		bits = 16

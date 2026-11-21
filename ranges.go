@@ -64,11 +64,10 @@ func load(txt string, named bool) table {
 }
 
 func (t table) find(ip string) (span, bool) {
-	a, err := netip.ParseAddr(ip)
-	if err != nil {
+	a, ok := addr(ip)
+	if !ok {
 		return span{}, false
 	}
-	a = a.Unmap()
 	// Only the last prefix starting at or before a can contain it.
 	i, _ := slices.BinarySearchFunc(t, a, func(s span, a netip.Addr) int {
 		if s.p.Addr().Compare(a) <= 0 {
@@ -87,7 +86,7 @@ var (
 	tor     = sync.OnceValue(func() table { return load(torTxt, false) })
 )
 
-// Provider names the cloud or VPS host whose range holds ip ("AWS",
+// Provider names the cloud or VPS host whose range holds ip (an address or a Network prefix) ("AWS",
 // "Hetzner"), or "" for any other network. Readers don't browse from
 // there; headless scanners do, with browser user agents that load assets.
 func Provider(ip string) string {

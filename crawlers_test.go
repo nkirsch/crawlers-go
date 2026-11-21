@@ -166,3 +166,29 @@ func TestChromeStable(t *testing.T) {
 		t.Errorf("8 weeks on: %d", got)
 	}
 }
+
+func TestV2(t *testing.T) {
+	v := reader("203.0.113.7")
+	for _, p := range []string{"/favicon.ico", "/app.js.map", "/ads.txt", "/.well-known/appspecific/com.chrome.devtools.json"} {
+		v.Hits = append(v.Hits, Hit{At: t0, Host: "example.com", Path: p, Status: 404})
+	}
+	if got := Reason(v); got != "" {
+		t.Errorf("browser misses counted as probes: %q", got)
+	}
+	v = reader("203.0.113.7")
+	for i := range 20 {
+		v.Hits = append(v.Hits, Hit{At: t0.Add(time.Duration(i) * time.Second), Method: "POST", Host: "example.com", Path: "/form", Status: 200})
+	}
+	if got := Reason(v); got != "" {
+		t.Errorf("POSTs counted as pages: %q", got)
+	}
+	if got := (Rules{}).Pages(v); got != 2 {
+		t.Errorf("Pages = %d, want 2", got)
+	}
+	if Provider("3.5.140.0/24") != "AWS" {
+		t.Error("prefix lookup")
+	}
+	if p, ok := WideNet(Network("2001:db8:1:2::5")); !ok || p.String() != "2001:db8::/32" {
+		t.Errorf("WideNet of a /64: %v", p)
+	}
+}

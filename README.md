@@ -15,6 +15,7 @@ if why := crawlers.Reason(v); why != "" {
 - Group requests by `crawlers.Network(ip)` (IPv6 /64) and user agent.
 - `Rules{Page, Extra}` adapts it to a site: which hits count as pages, and
   the site's own crawl patterns.
-- `Fleets` finds one outdated user agent spread over many networks.
+- `Fleets` finds one outdated user agent spread over many networks; `WideNet` is the block it counts by.
+- `Hit.Method`: only GET and HEAD count. `NotProbe` lists the 404s browsers make on their own.
 - `Provider(ip)` and `Tor(ip)` look up the embedded cloud/VPS and Tor exit
   ranges, refreshed with `go run ./cmd/ranges`.
