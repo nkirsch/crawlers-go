@@ -1,0 +1,24 @@
+name: refresh ranges
+on:
+  schedule: [{cron: "17 9 1 * *"}]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: go run ./cmd/ranges && go test ./...
+      - name: Open a PR
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          git diff --quiet -- ranges.txt tor.txt && exit 0
+          b=ranges-$(date -u +%Y-%m-%d)
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch -c "$b" && git commit -qam "Refresh cloud and Tor ranges" && git push -q origin "$b"
+          gh pr create --title "Refresh cloud and Tor ranges" --body "go run ./cmd/ranges"
